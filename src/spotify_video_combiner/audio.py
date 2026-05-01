@@ -10,10 +10,18 @@ The file extension is appended automatically based on ``--audio-format``, so
 the output template should not include ``.{ext}``. Setting the template to
 ``{spotid}`` gives us files at ``<library>/<spotify_id>.<ext>`` — exactly what
 the rest of the pipeline expects to find.
+
+Once zotify has cached its librespot OAuth result (after a successful first
+sign-in), it never needs an interactive TTY again — so on subsequent runs we
+hide the console window and stream zotify's stdout into the GUI log instead
+of popping a separate terminal. The first run still spawns a real console so
+the OAuth flow's "click this URL to log in" message is visible; Tranche 2
+will replace that with an in-process sign-in dialog.
 """
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from collections.abc import Callable, Iterable, Sequence
@@ -23,27 +31,56 @@ from .bundled import ZOTIFY_PROXY_FLAG, is_frozen, resolve_binary
 from .errors import UserFacingError
 from .installer import InstallError, can_auto_install, install_zotify
 from .manifest import Track
+from .processes import LogFn, SubprocessRunner, make_runner
 
 # Audio formats zotify can produce. Used to discover already-downloaded files.
 KNOWN_AUDIO_EXTS = ("ogg", "mp3", "m4a", "opus", "aac", "flac", "wav")
 
-# Default subprocess runner. Tests inject a fake to assert command construction
-# without spawning real processes.
-SubprocessRunner = Callable[[Sequence[str]], subprocess.CompletedProcess]
+
+def zotify_credentials_path() -> Path:
+    """Path where zotify caches its librespot OAuth result after first sign-in.
+
+    Mirrors :data:`zotify.config.SYSTEM_PATHS` so we can detect a successful
+    sign-in without importing zotify (which would pull in librespot and slow
+    down GUI startup).
+    """
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    return base / "Zotify" / "credentials.json"
 
 
-def _default_runner(cmd: Sequence[str]) -> subprocess.CompletedProcess:
+def zotify_is_authenticated() -> bool:
+    """True once zotify has written its credentials.json (i.e. signed in once)."""
+    return zotify_credentials_path().is_file()
+
+
+def _interactive_console_runner(cmd: Sequence[str]) -> subprocess.CompletedProcess:
+    """First-run fallback: spawn zotify in a real Windows console for OAuth."""
+    return subprocess.run(
+        list(cmd),
+        check=False,
+        creationflags=subprocess.CREATE_NEW_CONSOLE,
+    )
+
+
+def _make_default_runner(log: LogFn | None) -> SubprocessRunner:
+    """Pick a runner that suits the current zotify auth state and platform.
+
+    Once the user has signed in once, we hide the console window and (when a
+    ``log`` is supplied) stream zotify's output into it — no more popup
+    terminal. Before that first sign-in we *need* a visible console on
+    Windows GUI bundles so the user can paste their username and follow the
+    login URL; we fall back to spawning one only in that narrow case.
+    """
+    if not zotify_is_authenticated() and is_frozen() and sys.platform == "win32":
+        return _interactive_console_runner
     # check=False: zotify may exit non-zero when a single track fails; we
-    # detect outcomes by inspecting the filesystem instead.
-    #
-    # When running from a PyInstaller GUI bundle on Windows, our parent
-    # process has no console — but zotify needs one for first-time login
-    # prompts (and benefits from one for live progress output). Spawn it
-    # in a fresh console window so the user can interact with it.
-    kwargs: dict = {}
-    if is_frozen() and sys.platform == "win32":
-        kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
-    return subprocess.run(list(cmd), check=False, **kwargs)
+    # detect per-track outcomes by inspecting the filesystem instead.
+    return make_runner(log, check=False)
 
 
 class ZotifyError(UserFacingError):
@@ -82,8 +119,8 @@ class ZotifyDownloader:
     ) -> None:
         self._executable = executable
         self._extra_args = list(extra_args or [])
-        self._runner = runner or _default_runner
         self._log = log or (lambda _: None)
+        self._runner = runner or _make_default_runner(log)
 
     def ensure_available(self) -> str:
         """Return the invocation prefix for zotify.

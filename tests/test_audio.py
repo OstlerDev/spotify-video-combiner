@@ -10,7 +10,11 @@ from spotify_video_combiner.audio import (
     KNOWN_AUDIO_EXTS,
     ZotifyDownloader,
     ZotifyError,
+    _interactive_console_runner,
+    _make_default_runner,
     find_existing_audio,
+    zotify_credentials_path,
+    zotify_is_authenticated,
 )
 from spotify_video_combiner.manifest import Track
 
@@ -164,3 +168,96 @@ class TestZotifyDownloader:
         result = z.download_tracks(sample_tracks, tmp_path / "audio")
 
         assert result == {}  # nothing on disk afterwards
+
+
+class TestZotifyAuthDetection:
+    """Pure path-based detection of zotify's first-run credential cache."""
+
+    def test_path_lives_under_appdata_on_windows(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr("spotify_video_combiner.audio.sys.platform", "win32")
+        monkeypatch.setenv("APPDATA", str(tmp_path / "AppData"))
+        path = zotify_credentials_path()
+        assert path == tmp_path / "AppData" / "Zotify" / "credentials.json"
+
+    def test_path_lives_under_xdg_on_linux(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr("spotify_video_combiner.audio.sys.platform", "linux")
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+        path = zotify_credentials_path()
+        assert path == tmp_path / "xdg" / "Zotify" / "credentials.json"
+
+    def test_is_authenticated_only_when_file_exists(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        creds = tmp_path / "creds.json"
+        monkeypatch.setattr(
+            "spotify_video_combiner.audio.zotify_credentials_path", lambda: creds
+        )
+        assert zotify_is_authenticated() is False
+        creds.write_text("{}", encoding="utf-8")
+        assert zotify_is_authenticated() is True
+
+
+class TestMakeDefaultRunner:
+    """Pick the right runner for the current platform/auth state."""
+
+    def test_authenticated_uses_streaming_runner_when_log_given(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "spotify_video_combiner.audio.zotify_is_authenticated", lambda: True
+        )
+        sentinel = object()
+        monkeypatch.setattr(
+            "spotify_video_combiner.audio.make_runner",
+            lambda log, check: sentinel,
+        )
+        runner = _make_default_runner(lambda _: None)
+        assert runner is sentinel
+
+    def test_authenticated_uses_inherit_runner_when_no_log(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "spotify_video_combiner.audio.zotify_is_authenticated", lambda: True
+        )
+        seen: dict = {}
+
+        def fake_make_runner(log, check):
+            seen["log"] = log
+            seen["check"] = check
+            return "stub"
+
+        monkeypatch.setattr("spotify_video_combiner.audio.make_runner", fake_make_runner)
+        runner = _make_default_runner(None)
+        assert runner == "stub"
+        assert seen == {"log": None, "check": False}
+
+    def test_first_run_falls_back_to_visible_console_when_frozen_on_windows(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "spotify_video_combiner.audio.zotify_is_authenticated", lambda: False
+        )
+        monkeypatch.setattr("spotify_video_combiner.audio.is_frozen", lambda: True)
+        monkeypatch.setattr("spotify_video_combiner.audio.sys.platform", "win32")
+        runner = _make_default_runner(None)
+        assert runner is _interactive_console_runner
+
+    def test_first_run_uses_normal_runner_outside_windows_bundle(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # On non-frozen / non-Windows, even an unauthenticated zotify uses the
+        # normal runner because there's already a parent terminal for it to
+        # prompt on.
+        monkeypatch.setattr(
+            "spotify_video_combiner.audio.zotify_is_authenticated", lambda: False
+        )
+        monkeypatch.setattr("spotify_video_combiner.audio.is_frozen", lambda: False)
+        monkeypatch.setattr(
+            "spotify_video_combiner.audio.make_runner", lambda log, check: "stub"
+        )
+        assert _make_default_runner(None) == "stub"

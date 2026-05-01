@@ -47,7 +47,9 @@ def download_playlist(
     up where it left off.
     """
     metadata = metadata or SpotifyMetadata()
-    downloader = downloader or ZotifyDownloader(extra_args=list(zotify_extra or []))
+    downloader = downloader or ZotifyDownloader(
+        extra_args=list(zotify_extra or []), log=log
+    )
 
     log(f"Fetching playlist metadata: {playlist_url}")
     playlist = metadata.fetch_playlist(playlist_url)
@@ -100,7 +102,7 @@ def build_video(
     so re-running after fixing a single bad track only re-encodes that track.
     """
     renderer = renderer or SlideRenderer()
-    builder = builder or FFmpegVideoBuilder()
+    builder = builder or FFmpegVideoBuilder(log=log)
 
     playlist = Playlist.read(manifest_path_for(workdir))
     output = output or (workdir / f"{safe_filename(playlist.name)}.mp4")

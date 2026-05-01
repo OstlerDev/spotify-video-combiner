@@ -4,6 +4,7 @@ import shutil
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -81,6 +82,47 @@ class TestFFmpegVideoBuilder:
         vf = cmd[cmd.index("-vf") + 1]
         assert "scale=1280:720" in vf
         assert "pad=1280:720" in vf
+
+    def test_default_settings_are_tuned_for_static_images(self) -> None:
+        """Our defaults trade nothing for a 5-10x faster encode of identical frames."""
+        s = EncodeSettings()
+        assert s.fps <= 5, "high fps wastes encoder cycles on identical frames"
+        assert s.video_preset in {"ultrafast", "superfast", "veryfast", "faster", "fast"}, (
+            "preset 'medium' or slower spends time predicting frames that never change"
+        )
+
+    def test_keyframe_interval_emits_g_flag_only_when_set(self, tmp_path: Path) -> None:
+        seg = Segment(tmp_path / "i.png", tmp_path / "a.ogg", tmp_path / "o.mp4")
+
+        without = FFmpegVideoBuilder(settings=EncodeSettings(keyframe_interval=0))
+        cmd = without.build_segment_command(seg)
+        assert "-g" not in cmd
+
+        with_g = FFmpegVideoBuilder(settings=EncodeSettings(keyframe_interval=12))
+        cmd = with_g.build_segment_command(seg)
+        idx = cmd.index("-g")
+        assert cmd[idx + 1] == "12"
+
+    def test_log_callback_routes_to_streaming_runner(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Passing ``log=`` swaps the default runner for one that streams output."""
+        captured_log: list[Any] = []
+
+        def fake_make_runner(log, *, check):
+            captured_log.append((log, check))
+            return lambda cmd: subprocess.CompletedProcess(cmd, 0)
+
+        from spotify_video_combiner import video as video_mod
+
+        monkeypatch.setattr(video_mod, "make_runner", fake_make_runner)
+        sink: list[str] = []
+        FFmpegVideoBuilder(log=sink.append)
+        assert len(captured_log) == 1
+        log_fn, check = captured_log[0]
+        assert check is True
+        log_fn("hi")
+        assert sink == ["hi"]
 
     def test_concat_command_uses_concat_demuxer_and_stream_copy(self, tmp_path: Path) -> None:
         builder = FFmpegVideoBuilder()

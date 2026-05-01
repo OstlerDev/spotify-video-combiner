@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
-from spotify_video_combiner.cli import cli, main
+from spotify_video_combiner.cli import _bind_repl_exit_builtins, cli, main
 from spotify_video_combiner.errors import CredentialsError
 
 
@@ -88,6 +88,55 @@ class TestCliWiring:
         assert captured_argv == [
             ["zotify", "https://open.spotify.com/track/abc", "--root-path", "."]
         ]
+
+    def test_zotify_proxy_mode_binds_exit_builtin_before_invoking_zotify(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Zotify calls bare ``exit()`` (a REPL-only builtin); we must bind it.
+
+        Without this shim, frozen builds raise ``NameError: name 'exit' is not
+        defined`` at the end of every successful zotify run.
+        """
+        import builtins
+        import contextlib
+
+        had_exit_during_call: list[bool] = []
+
+        def fake_zotify_main():
+            had_exit_during_call.append(hasattr(builtins, "exit"))
+            # Mirror zotify's actual behaviour: call exit(0), which raises
+            # SystemExit when properly bound. We swallow it so the test can
+            # observe the post-call state.
+            with contextlib.suppress(SystemExit):
+                builtins.exit(0)
+
+        import zotify.__main__ as zmod
+
+        monkeypatch.setattr(zmod, "main", fake_zotify_main)
+        # Simulate the PyInstaller stub-site state where ``exit`` is absent.
+        monkeypatch.delattr(builtins, "exit", raising=False)
+        monkeypatch.delattr(builtins, "quit", raising=False)
+        monkeypatch.setattr(sys, "argv", ["svc.exe", "--zotify-mode", "x"])
+
+        main()
+
+        assert had_exit_during_call == [True]
+        assert builtins.exit is sys.exit
+        assert builtins.quit is sys.exit
+
+    def test_bind_repl_exit_builtins_is_idempotent(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Calling the shim twice (or with the builtins already present) is safe."""
+        import builtins
+
+        sentinel = lambda *_: None  # noqa: E731
+        monkeypatch.setattr(builtins, "exit", sentinel, raising=False)
+        monkeypatch.setattr(builtins, "quit", sentinel, raising=False)
+        _bind_repl_exit_builtins()
+        # Existing bindings should be left alone.
+        assert builtins.exit is sentinel
+        assert builtins.quit is sentinel
 
     def test_main_renders_user_facing_errors_without_traceback(
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]

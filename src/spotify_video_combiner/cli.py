@@ -118,12 +118,31 @@ def _maybe_run_as_zotify() -> bool:
     if ZOTIFY_PROXY_FLAG not in sys.argv:
         return False
     _attach_console_if_needed()
+    _bind_repl_exit_builtins()
     idx = sys.argv.index(ZOTIFY_PROXY_FLAG)
     sys.argv = ["zotify", *sys.argv[idx + 1 :]]
     from zotify.__main__ import main as zotify_main
 
     zotify_main()
     return True
+
+
+def _bind_repl_exit_builtins() -> None:
+    """Re-add ``exit`` and ``quit`` to ``builtins`` before invoking zotify.
+
+    Zotify's CLI calls bare ``exit(0)``/``exit(1)`` (the REPL builtins normally
+    injected by ``site.py``). PyInstaller's stub site does not install them,
+    so frozen builds raise ``NameError: name 'exit' is not defined`` at the
+    end of every successful run — which masks any real error zotify printed
+    just before exiting. Binding them back to :func:`sys.exit` is the
+    smallest fix that lets zotify shut down cleanly.
+    """
+    import builtins
+
+    if not hasattr(builtins, "exit"):
+        builtins.exit = sys.exit
+    if not hasattr(builtins, "quit"):
+        builtins.quit = sys.exit
 
 
 def _attach_console_if_needed() -> None:

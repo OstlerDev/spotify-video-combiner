@@ -305,7 +305,8 @@ class App(tk.Tk):
                 )
                 renderer = SlideRenderer()
                 builder = FFmpegVideoBuilder(
-                    settings=EncodeSettings(width=width, height=height)
+                    settings=EncodeSettings(width=width, height=height),
+                    log=log,
                 )
                 output = build_video(
                     resolved_workdir,

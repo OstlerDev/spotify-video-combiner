@@ -31,9 +31,7 @@ output/
 !tests/fixtures/**/*.mp4
 
 # PyInstaller bundle artifacts
-build/
-dist/
 *.spec.bak
 
-# Cached Login credentials to Spotify
+# Spotify / zotify caches that may land next to the project during dev runs
 .cache
