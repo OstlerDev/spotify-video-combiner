@@ -5,7 +5,7 @@
 .DESCRIPTION
   Bootstraps a venv (if needed), installs dev/build deps + this package,
   downloads a static ffmpeg build into ./build/ffmpeg.exe, and runs
-  PyInstaller against svc.spec. The result is dist\svc-gui.exe — a single
+  PyInstaller against svc.spec. The result is dist\svc-gui.exe - a single
   file, no Python required to run.
 
   ffmpeg static build comes from https://www.gyan.dev/ffmpeg/builds/ (Gyan
@@ -34,7 +34,7 @@ function Write-Ok([string]$m)   { Write-Host "    $m" -ForegroundColor Green }
 function Write-Warn2([string]$m){ Write-Host "    $m" -ForegroundColor Yellow }
 
 if (-not (Test-Path $VenvPath)) {
-    Write-Step "No venv at $VenvPath — running install.ps1 first"
+    Write-Step "No venv at $VenvPath - running install.ps1 first"
     & "$PSScriptRoot\install.ps1" -VenvPath $VenvPath -SkipFfmpegPrompt
 }
 
@@ -90,5 +90,5 @@ Write-Step "Build complete."
 Write-Host ""
 Write-Ok "Output: $outExe ($sizeMb MB)"
 Write-Host ""
-Write-Host "Distribute this single .exe — no Python install required to run it." -ForegroundColor White
+Write-Host "Distribute this single .exe - no Python install required to run it." -ForegroundColor White
 Write-Warn2 "Note: first launch unpacks ~$sizeMb MB to %TEMP%, so cold-start takes a few seconds."

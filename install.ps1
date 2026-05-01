@@ -38,21 +38,65 @@ function Write-Warn2([string]$msg) { Write-Host "    $msg" -ForegroundColor Yell
 function Write-Err2([string]$msg)  { Write-Host "    $msg" -ForegroundColor Red }
 
 # --- 1. Find a usable Python ------------------------------------------------
-Write-Step "Locating Python 3.11+"
-$python = $null
-foreach ($candidate in @("py -3.12", "py -3.11", "py -3", "python", "python3")) {
-    $parts = $candidate -split " "
-    $cmd = Get-Command $parts[0] -ErrorAction SilentlyContinue
-    if (-not $cmd) { continue }
-    $verJson = & $parts[0] $parts[1..($parts.Length - 1)] -c "import sys, json; print(json.dumps(sys.version_info[:3]))" 2>$null
-    if (-not $verJson) { continue }
-    $version = ($verJson | ConvertFrom-Json)
-    if ($version[0] -gt 3 -or ($version[0] -eq 3 -and $version[1] -ge 11)) {
-        $python = $candidate
-        Write-Ok "Found $candidate -> Python $($version -join '.')"
-        break
+function Test-IsWindowsAppStub {
+    # The Microsoft Store ships a 0-byte `python.exe` redirector at
+    # %LocalAppData%\Microsoft\WindowsApps\python.exe. Running it with no
+    # Python installed opens the Store and blocks waiting for the user to
+    # finish the install dialog -- which would *actually* hang our script.
+    # Detect it by path and skip.
+    param([string]$path)
+    if (-not $path) { return $false }
+    return ($path -like "*\Microsoft\WindowsApps\*")
+}
+
+function Resolve-Python {
+    # Probe each candidate; the loop must NOT halt under
+    # ErrorActionPreference=Stop when an early candidate fails (py.exe
+    # writes "No suitable Python runtime found" to stderr when no Python
+    # is registered with the launcher, and we want to fall through to
+    # plain `python` cleanly).
+    $previousEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        foreach ($candidate in @("py -3", "python", "python3")) {
+            $parts = $candidate -split " "
+            $cmdInfo = Get-Command $parts[0] -ErrorAction SilentlyContinue
+            if (-not $cmdInfo) { continue }
+            if (Test-IsWindowsAppStub $cmdInfo.Source) {
+                Write-Warn2 "Skipping $($parts[0]) (Microsoft Store stub at $($cmdInfo.Source))"
+                continue
+            }
+            # CRITICAL: $extra MUST be an array, not a scalar. Splatting a
+            # scalar string with `@var` iterates over its CHARACTERS, so
+            # `py -3` would be invoked as `py "-" "3" -c ...`. py.exe
+            # interprets a bare "-" as "read script from stdin" and
+            # blocks forever waiting on input.
+            #
+            # `Select-Object -Skip 1` followed by an outer `@(...)` is the
+            # only reliable PowerShell incantation here: a bare range
+            # slice unwraps single-element results to a scalar, and even
+            # `@(if (...) { ... })` doesn't re-wrap because the `if`
+            # expression unwraps before `@()` sees the value.
+            $extra = @($parts | Select-Object -Skip 1)
+            $verJson = & $parts[0] @extra -c "import sys, json; print(json.dumps(sys.version_info[:3]))" 2>$null
+            if ($LASTEXITCODE -ne 0 -or -not $verJson) { continue }
+            $version = $verJson | ConvertFrom-Json -ErrorAction SilentlyContinue
+            if (-not $version) { continue }
+            if ($version[0] -gt 3 -or ($version[0] -eq 3 -and $version[1] -ge 11)) {
+                Write-Ok "Found $candidate -> Python $($version -join '.')"
+                return $candidate
+            } else {
+                Write-Warn2 "Skipping $candidate (Python $($version -join '.') is too old; need 3.11+)"
+            }
+        }
+        return $null
+    } finally {
+        $ErrorActionPreference = $previousEAP
     }
 }
+
+Write-Step "Locating Python 3.11+"
+$python = Resolve-Python
 
 if (-not $python) {
     Write-Err2 "No suitable Python found. Install Python 3.11+ from https://www.python.org/downloads/ (be sure to check 'Add to PATH'), then re-run this installer."
@@ -65,7 +109,11 @@ if (Test-Path $VenvPath) {
     Write-Ok "Reusing existing $VenvPath"
 } else {
     $pyParts = $python -split " "
-    & $pyParts[0] @($pyParts[1..($pyParts.Length - 1)]) -m venv $VenvPath
+    # See note in Resolve-Python: must use `@(... | Select-Object -Skip 1)`
+    # so a single trailing arg like `-3` doesn't unwrap to a scalar and get
+    # splatted character-by-character into the child invocation.
+    $pyExtra = @($pyParts | Select-Object -Skip 1)
+    & $pyParts[0] @pyExtra -m venv $VenvPath
     if ($LASTEXITCODE -ne 0) { throw "Failed to create venv" }
     Write-Ok "Created $VenvPath"
 }
@@ -83,7 +131,8 @@ if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed" }
 Write-Ok "pip is current"
 
 Write-Step "Installing spotify-video-combiner (this also installs zotify)"
-Write-Warn2 "First-time install pulls librespot + protobuf + zotify; expect ~30-60s."
+Write-Warn2 "First-time install clones librespot + zotify from GitHub; allow 1-3 minutes."
+Write-Warn2 "If output appears to pause, pip is waiting on git -- not hung."
 & $venvPython -m pip install -e . --upgrade
 if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 Write-Ok "Package installed"

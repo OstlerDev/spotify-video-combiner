@@ -45,7 +45,7 @@ The bundle contains:
 
 So nothing else to install — just run.
 
-**First run:** the GUI prompts you to paste your Spotify Web API Client ID + Secret (one-time setup, stored at `%APPDATA%\spotify-video-combiner\credentials.env`). When the first track download starts, zotify pops a console window asking for your Spotify Premium **username + password** (also one-time; cached afterward).
+**First run:** the GUI prompts you to paste your Spotify Web API Client ID + Secret (one-time setup, stored at `%APPDATA%\spotify-video-combiner\credentials.env`). When the first track download starts, zotify pops a console window asking for your Spotify Premium **username + password**, then gives you an OAuth login URL to authorise (also one-time; the resulting token is cached at `%APPDATA%\Zotify\credentials.json`). On subsequent runs zotify uses the cached token silently — no console window, log output streams into the GUI.
 
 To build the `.exe` yourself:
 
@@ -180,7 +180,7 @@ Every layer is **idempotent** — re-running after a partial failure only redoes
 - **`spotipy`** for metadata — clean access to playlist ordering and the highest-resolution cover art URL via the Spotify Web API. Free developer app, no user login.
 - **`zotify`** for audio — only practical way to download Spotify-quality audio. Uses your own Premium credentials via [`librespot`](https://github.com/librespot-org/librespot). Original `zotify-dev/zotify` is abandoned; this depends on the actively-maintained [`DraftKinner/zotify`](https://github.com/DraftKinner/zotify) fork.
 - **`Pillow`** for slides — composes a 1080p frame per track: blurred dimmed cover-art background + centered cover + auto-sized title/artist text. Renders to a single PNG so ffmpeg only deals with images, never fonts (avoiding fontconfig hell on Windows).
-- **`ffmpeg`** for encoding — `-loop 1 ... -shortest` produces a fixed-image segment matching each track's audio length. Every segment is encoded with identical codec parameters, so the final concat step uses `-c copy` (stream-copy, no re-encode).
+- **`ffmpeg`** for encoding — `-loop 1 ... -shortest` produces a fixed-image segment matching each track's audio length. Because every frame within a segment is byte-identical, we run libx264 with `-preset veryfast -r 2 -tune stillimage`: a 4-minute track becomes 480 frames instead of 7,200, and the encoder spends no time on motion estimation it would only confirm is zero. Real-world segments encode in 1-3 s on a modern CPU. Every segment is produced with identical codec parameters, so the final concat step uses `-c copy` (stream-copy, no re-encode).
 - **PyInstaller** for the `.exe` — `--onefile` produces a single binary; ffmpeg is bundled under `binaries/`, zotify ships as a Python package, and the bundle re-enters itself with a `--zotify-mode` flag (allocating a console at runtime via `AllocConsole`) when zotify needs to run.
 
 ### Module map
@@ -194,6 +194,7 @@ Every layer is **idempotent** — re-running after a partial failure only redoes
 | `slides` | Pillow-based slide renderer (blurred bg + cover + text). |
 | `video` | ffmpeg subprocess wrapper: per-track segment encode + concat. |
 | `pipeline` | Orchestration: `download_playlist` and `build_video` workflows. |
+| `processes` | Window-suppressing subprocess runners; line-streams child stdio into a log callback. |
 | `cli` | Click adapter (CLI). Also handles the `--zotify-mode` proxy in frozen builds. |
 | `gui` | Tkinter GUI with threaded pipeline runner + credentials setup dialog. |
 | `bundled` | Locate binaries that may live inside `sys._MEIPASS`. |
@@ -201,7 +202,7 @@ Every layer is **idempotent** — re-running after a partial failure only redoes
 | `config` | Load `credentials.env` from project-local + user-config locations. |
 | `errors` | `UserFacingError` hierarchy that the CLI renders cleanly (no traceback). |
 
-External processes (`zotify`, `ffmpeg`) are wrapped behind injectable `runner` callables so the entire pipeline is unit-testable without spawning real subprocesses.
+External processes (`zotify`, `ffmpeg`) are wrapped behind injectable `runner` callables so the entire pipeline is unit-testable without spawning real subprocesses. From the GUI, those runners stream child output line-by-line into the log widget instead of popping focus-stealing console windows.
 
 ---
 
@@ -214,7 +215,7 @@ ruff check src tests                                              # lint
 pytest --cov=spotify_video_combiner --cov-report=term-missing     # coverage
 ```
 
-The test suite (~125 tests, 92% coverage) covers manifest serialisation, URL parsing, command construction, file idempotency, slide rendering, frozen-mode dispatch, credentials file parsing, error translation, and a real ffmpeg integration test that produces a tiny end-to-end MP4. External services (Spotify API, zotify subprocess, network) are mocked.
+The test suite (~150 tests) covers manifest serialisation, URL parsing, command construction, file idempotency, slide rendering, frozen-mode dispatch, credentials file parsing, error translation, the subprocess window-suppression + stream-to-log helpers, and a real ffmpeg integration test that produces a tiny end-to-end MP4. External services (Spotify API, zotify subprocess, network) are mocked.
 
 ### Building the .exe
 
