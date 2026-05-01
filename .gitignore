@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+.python-version
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project output
+output/
+*.mp4
+!tests/fixtures/**/*.mp4
+
+# PyInstaller bundle artifacts
+build/
+dist/
+*.spec.bak
+
+# Cached Login credentials to Spotify
+.cache

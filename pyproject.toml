@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "spotify-video-combiner"
+version = "0.1.0"
+description = "Download a Spotify playlist's audio + cover art and combine it into a single MP4 (built for VRChat-via-YouTube use)."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+authors = [{ name = "Sky" }]
+keywords = ["spotify", "playlist", "video", "ffmpeg", "vrchat", "zotify"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Operating System :: OS Independent",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Multimedia :: Video :: Conversion",
+]
+dependencies = [
+    "click>=8.1",
+    "spotipy>=2.24",
+    "Pillow>=12.0",
+    "requests>=2.32",
+    # Zotify (DraftKinner's actively-maintained fork) handles the actual audio
+    # download from Spotify Premium. Pinned to the git URL because it is not on
+    # PyPI; pip will build a wheel locally on install.
+    "zotify @ git+https://github.com/DraftKinner/zotify.git",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+]
+build = [
+    "pyinstaller>=6.10",
+]
+
+[project.scripts]
+svc = "spotify_video_combiner.cli:main"
+spotify-video-combiner = "spotify_video_combiner.cli:main"
+svc-gui = "spotify_video_combiner.gui:main"
+
+[project.urls]
+Homepage = "https://github.com/Skyrior/spotify-video-combiner"
+Issues = "https://github.com/Skyrior/spotify-video-combiner/issues"
+
+[tool.hatch.metadata]
+# Required because we depend on zotify via a git URL (it is not on PyPI).
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/spotify_video_combiner"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = ["E501"]
