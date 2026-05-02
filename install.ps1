@@ -172,7 +172,8 @@ Write-Host "Then launch the GUI:" -ForegroundColor White
 Write-Host "  svc-gui"
 Write-Host ""
 Write-Host "Or use the CLI directly:" -ForegroundColor White
+Write-Host "  svc signin                                          # one-time browser sign-in"
 Write-Host "  svc all https://open.spotify.com/playlist/<id>"
 Write-Host ""
-Write-Host "First-time: a Spotify Web API credentials template will be created" -ForegroundColor White
-Write-Host "in %APPDATA%\spotify-video-combiner\credentials.env. Fill it in once."
+Write-Host "First-time: clicking 'Sign In' (or running 'svc signin') opens" -ForegroundColor White
+Write-Host "your browser to authorise this app with your Spotify account."

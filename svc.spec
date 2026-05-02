@@ -10,7 +10,8 @@
 #
 # Notes on tricky packages:
 #   - zotify is a Python package (no separate exe needed); we re-enter our own
-#     bundle via the --zotify-mode flag (see cli.main).
+#     bundle via the --zotify-mode flag (see cli.main). We also use it as a
+#     library for the in-app sign-in flow and metadata reads.
 #   - librespot has a few non-importable runtime imports; we use --collect-all.
 #   - protobuf < 4 (pinned by zotify) ships a `_internal_create_key` symbol
 #     PyInstaller doesn't see by default.
@@ -31,7 +32,7 @@ if ffmpeg_path.is_file():
 datas = []
 hiddenimports = collect_submodules("zotify") + collect_submodules("librespot")
 
-for pkg in ("zotify", "librespot", "music_tag", "spotipy"):
+for pkg in ("zotify", "librespot", "music_tag"):
     pkg_datas, pkg_binaries, pkg_hiddenimports = collect_all(pkg)
     datas += pkg_datas
     binaries += pkg_binaries

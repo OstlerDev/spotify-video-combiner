@@ -7,40 +7,31 @@ helpers; the rendering + threading logic is exercised manually.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
-from spotify_video_combiner import config, gui
+from spotify_video_combiner import auth, gui
 
 
 @pytest.fixture(autouse=True)
-def isolated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    cwd = tmp_path / "cwd"
-    cwd.mkdir()
-    monkeypatch.chdir(cwd)
-    user_root = tmp_path / "userconfig"
-    monkeypatch.setenv("APPDATA", str(user_root))
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(user_root))
+def isolated_credentials(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    auth.reset_cached_session()
 
 
-class TestCredentialsPresent:
-    def test_false_when_no_creds_anywhere(self) -> None:
-        assert gui.credentials_present() is False
+class TestAuthHelpers:
+    def test_is_signed_in_false_by_default(self) -> None:
+        assert auth.is_signed_in() is False
 
-    def test_true_when_user_config_has_creds(self) -> None:
-        path = config.user_config_dir() / config.CREDENTIALS_FILENAME
+    def test_is_signed_in_true_when_credentials_exist(self) -> None:
+        path = auth.credentials_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            "SPOTIPY_CLIENT_ID=set\nSPOTIPY_CLIENT_SECRET=set\n", encoding="utf-8"
-        )
-        assert gui.credentials_present() is True
-
-    def test_false_when_template_has_blank_values(self) -> None:
-        path = config.user_config_dir() / config.CREDENTIALS_FILENAME
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(config.CREDENTIALS_TEMPLATE, encoding="utf-8")
-        assert gui.credentials_present() is False
+        path.write_text(json.dumps({"username": "alice"}), encoding="utf-8")
+        assert auth.is_signed_in() is True
+        assert auth.current_username() == "alice"
 
 
 class TestStaticChoices:

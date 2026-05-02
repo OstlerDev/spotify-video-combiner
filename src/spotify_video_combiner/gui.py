@@ -7,9 +7,11 @@ Architecture:
 - A periodic ``after()`` callback drains the queue into the log widget so
   output appears live without any cross-thread Tk calls.
 
-If credentials are missing, a small modal dialog lets the user paste their
-Spotify Web API client ID + secret and writes them straight to the on-disk
-``credentials.env`` — no need for the user to know the file format or path.
+Sign-in is a one-button flow (Sign In / Sign Out) that drives zotify's OAuth
+in-process: the browser handles the actual Spotify login, our localhost
+callback captures the token, librespot writes ``credentials.json``, and the
+same session is then reused for both metadata reads *and* audio download --
+no developer credentials, no console pop-up, no second auth step.
 """
 
 from __future__ import annotations
@@ -22,14 +24,10 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from . import __version__
-from .config import (
-    CREDENTIALS_FILENAME,
-    CREDENTIALS_TEMPLATE,
-    load_credentials_files,
-    user_config_dir,
-)
+from .auth import current_username, is_signed_in, sign_in, sign_out
 from .errors import UserFacingError
 from .pipeline import build_video, download_playlist
+from .processes import LogChannels
 from .slides import SlideRenderer
 from .video import EncodeSettings, FFmpegVideoBuilder
 
@@ -51,85 +49,106 @@ DEFAULT_AUDIO_FORMATS: dict[str, list[str]] = {
 }
 
 QUEUE_POLL_MS = 100  # how often the UI drains log messages from the worker
+SUBPROCESS_LOG_MAX_LINES = 500  # ring-buffer cap for the verbose subprocess pane
+
+# Tag for log queue items. ``"P"`` => pipeline (top pane), ``"S"`` => subprocess
+# (bottom pane), ``None`` => sentinel meaning "pipeline finished".
+_LogItem = tuple[str, str] | None
 
 
-# --- Credentials setup dialog --------------------------------------------------
+# --- Sign-in dialog ----------------------------------------------------------
 
 
-class CredentialsDialog(tk.Toplevel):
-    """Modal dialog that captures + writes Spotify Web API credentials."""
+class SignInDialog(tk.Toplevel):
+    """Modal that drives zotify's OAuth flow.
+
+    The flow mirrors zotify's own ``input("Username: ") -> auth_interactive
+    -> from_oauth`` exactly; we just present a Tk text field and a
+    "Sign In" button instead of a console prompt. The blocking part
+    (waiting on librespot's localhost callback at port 4381) runs on a
+    worker thread and reports back through a queue so Tk stays responsive.
+    """
 
     def __init__(self, master: tk.Tk) -> None:
         super().__init__(master)
-        self.title("Spotify API Credentials")
+        self.title("Sign in to Spotify")
         self.transient(master)
         self.grab_set()
         self.resizable(False, False)
-        self.saved = False
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
 
-        prelude = (
-            "spotify-video-combiner needs free Spotify Web API credentials\n"
-            "to read playlist metadata. Create an app at the link below,\n"
-            "then paste the Client ID and Client Secret here."
-        )
-        ttk.Label(self, text=prelude, justify="left").pack(padx=20, pady=(20, 5))
+        self.username: str | None = None
+        self._result_queue: queue.Queue[tuple[bool, str]] = queue.Queue()
+        self._signed_in_as: str | None = None
 
-        link = ttk.Label(
+        ttk.Label(
             self,
-            text="Open developer.spotify.com/dashboard",
-            foreground="blue",
-            cursor="hand2",
-        )
-        link.pack(padx=20, pady=(0, 15))
-        link.bind("<Button-1>", lambda _: webbrowser.open("https://developer.spotify.com/dashboard"))
+            text=(
+                "Sign in with your Spotify Premium account. Enter your username\n"
+                "(usually your email), then click Sign In to open Spotify in\n"
+                "your browser. Once you approve, you'll be brought back here."
+            ),
+            justify="left",
+        ).pack(padx=24, pady=(20, 12))
 
         form = ttk.Frame(self)
-        form.pack(padx=20, pady=5, fill="x")
+        form.pack(padx=24, fill="x")
+        ttk.Label(form, text="Username:").grid(row=0, column=0, sticky="w", pady=4)
+        self._username_var = tk.StringVar()
+        self._username_entry = ttk.Entry(form, textvariable=self._username_var, width=36)
+        self._username_entry.grid(row=0, column=1, padx=(8, 0), pady=4)
 
-        ttk.Label(form, text="Client ID:").grid(row=0, column=0, sticky="w", pady=4)
-        self.client_id = ttk.Entry(form, width=44)
-        self.client_id.grid(row=0, column=1, padx=(10, 0))
-
-        ttk.Label(form, text="Client Secret:").grid(row=1, column=0, sticky="w", pady=4)
-        self.client_secret = ttk.Entry(form, width=44, show="*")
-        self.client_secret.grid(row=1, column=1, padx=(10, 0))
+        self._status = ttk.Label(self, text="", foreground="gray")
+        self._status.pack(padx=24, pady=(8, 12))
 
         buttons = ttk.Frame(self)
-        buttons.pack(padx=20, pady=15, fill="x")
-        ttk.Button(buttons, text="Cancel", command=self._cancel).pack(side="right", padx=(8, 0))
-        ttk.Button(buttons, text="Save", command=self._save).pack(side="right")
+        buttons.pack(padx=24, pady=(0, 20), fill="x")
+        self._cancel_btn = ttk.Button(buttons, text="Cancel", command=self._cancel)
+        self._cancel_btn.pack(side="right", padx=(8, 0))
+        self._submit_btn = ttk.Button(buttons, text="Sign In", command=self._launch)
+        self._submit_btn.pack(side="right")
 
-        self.client_id.focus_set()
-        self.bind("<Return>", lambda _: self._save())
+        self._username_entry.focus_set()
+        self.bind("<Return>", lambda _: self._launch())
         self.bind("<Escape>", lambda _: self._cancel())
+        self.after(QUEUE_POLL_MS, self._drain_result)
 
-    def _save(self) -> None:
-        cid = self.client_id.get().strip()
-        secret = self.client_secret.get().strip()
-        if not cid or not secret:
-            messagebox.showerror("Missing values", "Both Client ID and Secret are required.", parent=self)
+    def _launch(self) -> None:
+        username = self._username_var.get().strip()
+        if not username:
+            messagebox.showerror("Missing username", "Enter your Spotify username first.", parent=self)
             return
-        target = user_config_dir() / CREDENTIALS_FILENAME
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(
-            CREDENTIALS_TEMPLATE.replace(
-                "SPOTIPY_CLIENT_ID=", f"SPOTIPY_CLIENT_ID={cid}"
-            ).replace(
-                "SPOTIPY_CLIENT_SECRET=", f"SPOTIPY_CLIENT_SECRET={secret}"
-            ),
-            encoding="utf-8",
-        )
-        self.saved = True
-        self.destroy()
+        self._submit_btn.configure(state="disabled")
+        self._username_entry.configure(state="disabled")
+        self._signed_in_as = username
+        self._status.configure(text="Waiting for Spotify... finish the login in your browser.")
+        threading.Thread(target=self._run_oauth, args=(username,), daemon=True).start()
+
+    def _run_oauth(self, username: str) -> None:
+        try:
+            sign_in(username, webbrowser.open)
+            self._result_queue.put((True, username))
+        except Exception as exc:
+            self._result_queue.put((False, str(exc)))
+
+    def _drain_result(self) -> None:
+        try:
+            ok, payload = self._result_queue.get_nowait()
+        except queue.Empty:
+            self.after(QUEUE_POLL_MS, self._drain_result)
+            return
+        if ok:
+            self.username = payload
+            self.destroy()
+        else:
+            messagebox.showerror("Sign-in failed", payload, parent=self)
+            self._cancel()
 
     def _cancel(self) -> None:
-        self.saved = False
+        # zotify's OAuth callback server is on a daemon thread; we just
+        # stop caring about it. (No clean cancel API in zotify upstream.)
+        self.username = None
         self.destroy()
-
-
-def credentials_present() -> bool:
-    creds = load_credentials_files()
-    return bool(creds.get("SPOTIPY_CLIENT_ID")) and bool(creds.get("SPOTIPY_CLIENT_SECRET"))
 
 
 # --- Main window ---------------------------------------------------------------
@@ -142,11 +161,12 @@ class App(tk.Tk):
         self.geometry("780x620")
         self.minsize(680, 540)
 
-        self._log_queue: queue.Queue[str | None] = queue.Queue()
+        self._log_queue: queue.Queue[_LogItem] = queue.Queue()
         self._worker: threading.Thread | None = None
         self._last_result: tuple[bool, str] | None = None  # (success, message-or-output-path)
 
         self._build_layout()
+        self._refresh_auth_button()
         self.after(QUEUE_POLL_MS, self._drain_log_queue)
 
     # --- layout ----------------------------------------------------------
@@ -202,8 +222,10 @@ class App(tk.Tk):
         action.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(12, 4))
         self.combine_button = ttk.Button(action, text="Combine playlist into MP4", command=self._start_pipeline)
         self.combine_button.pack(side="left")
-        self.creds_button = ttk.Button(action, text="Spotify credentials...", command=self._open_credentials_dialog)
-        self.creds_button.pack(side="left", padx=(8, 0))
+        self.auth_button = ttk.Button(action, text="Sign In", command=self._toggle_auth)
+        self.auth_button.pack(side="right")
+        self.auth_status = ttk.Label(action, text="", foreground="gray")
+        self.auth_status.pack(side="right", padx=(0, 8))
 
         self.status_var = tk.StringVar(value="Idle.")
         ttk.Label(outer, textvariable=self.status_var, foreground="gray").grid(
@@ -212,21 +234,37 @@ class App(tk.Tk):
         self.progress = ttk.Progressbar(outer, mode="indeterminate")
         self.progress.grid(row=8, column=0, columnspan=3, sticky="ew", pady=(0, 8))
 
-        self.log_widget = scrolledtext.ScrolledText(
-            outer,
-            wrap="word",
-            height=18,
-            font=("Consolas", 9),
-            background="#101218",
-            foreground="#dcdcdc",
-            insertbackground="#dcdcdc",
+        # Two log panes split by a draggable divider:
+        # - top: high-level pipeline progress (sparse, important).
+        # - bottom: live tail of zotify/ffmpeg subprocess output (chatty,
+        #   ring-buffered so it never grows without bound).
+        log_pane = ttk.PanedWindow(outer, orient="vertical")
+        log_pane.grid(row=9, column=0, columnspan=3, sticky="nsew")
+
+        self.pipeline_log = self._make_log_widget(log_pane, height=12)
+        log_pane.add(self.pipeline_log, weight=3)
+        self.subprocess_log = self._make_log_widget(
+            log_pane, height=6, foreground="#9aa0a6"
         )
-        self.log_widget.grid(row=9, column=0, columnspan=3, sticky="nsew")
-        self.log_widget.configure(state="disabled")
+        log_pane.add(self.subprocess_log, weight=2)
 
         outer.columnconfigure(0, weight=1)
         outer.columnconfigure(1, weight=1)
         outer.rowconfigure(9, weight=1)
+
+    @staticmethod
+    def _make_log_widget(parent: tk.Misc, *, height: int, foreground: str = "#dcdcdc") -> scrolledtext.ScrolledText:
+        widget = scrolledtext.ScrolledText(
+            parent,
+            wrap="word",
+            height=height,
+            font=("Consolas", 9),
+            background="#101218",
+            foreground=foreground,
+            insertbackground=foreground,
+        )
+        widget.configure(state="disabled")
+        return widget
 
     # --- helpers ---------------------------------------------------------
 
@@ -235,17 +273,56 @@ class App(tk.Tk):
         if chosen:
             self.workdir_var.set(chosen)
 
-    def _open_credentials_dialog(self) -> None:
-        dialog = CredentialsDialog(self)
-        self.wait_window(dialog)
-        if dialog.saved:
-            self._append_log("Credentials saved.\n")
+    def _refresh_auth_button(self) -> None:
+        if is_signed_in():
+            user = current_username() or "Spotify"
+            self.auth_button.configure(text="Sign Out")
+            self.auth_status.configure(text=f"Signed in as {user}")
+        else:
+            self.auth_button.configure(text="Sign In")
+            self.auth_status.configure(text="Not signed in")
 
-    def _append_log(self, message: str) -> None:
-        self.log_widget.configure(state="normal")
-        self.log_widget.insert("end", message)
-        self.log_widget.see("end")
-        self.log_widget.configure(state="disabled")
+    def _toggle_auth(self) -> None:
+        if is_signed_in():
+            if not messagebox.askyesno(
+                "Sign out?",
+                "Sign out of Spotify? You'll need to sign in again before downloading.",
+                parent=self,
+            ):
+                return
+            sign_out()
+            self._append_log("Signed out.\n")
+        else:
+            self._open_sign_in()
+        self._refresh_auth_button()
+
+    def _open_sign_in(self) -> bool:
+        """Run the sign-in dialog. Returns True if the user is now signed in."""
+        dialog = SignInDialog(self)
+        self.wait_window(dialog)
+        if dialog.username:
+            self._append_pipeline(f"Signed in as {dialog.username}.\n")
+            return True
+        return False
+
+    def _append_pipeline(self, message: str) -> None:
+        self._append(self.pipeline_log, message)
+
+    def _append_subprocess(self, message: str) -> None:
+        self._append(self.subprocess_log, message, max_lines=SUBPROCESS_LOG_MAX_LINES)
+
+    @staticmethod
+    def _append(widget: scrolledtext.ScrolledText, message: str, *, max_lines: int | None = None) -> None:
+        widget.configure(state="normal")
+        widget.insert("end", message if message.endswith("\n") else message + "\n")
+        if max_lines is not None:
+            # ``index('end-1c')`` is the last visible character; its line number
+            # tells us total lines. Trim from the top so the view stays tail-pinned.
+            line_count = int(widget.index("end-1c").split(".", 1)[0])
+            if line_count > max_lines:
+                widget.delete("1.0", f"{line_count - max_lines + 1}.0")
+        widget.see("end")
+        widget.configure(state="disabled")
 
     def _drain_log_queue(self) -> None:
         try:
@@ -254,7 +331,11 @@ class App(tk.Tk):
                 if item is None:
                     self._on_pipeline_done()
                     continue
-                self._append_log(item if item.endswith("\n") else item + "\n")
+                channel, message = item
+                if channel == "P":
+                    self._append_pipeline(message)
+                else:
+                    self._append_subprocess(message)
         except queue.Empty:
             pass
         self.after(QUEUE_POLL_MS, self._drain_log_queue)
@@ -270,16 +351,9 @@ class App(tk.Tk):
             messagebox.showerror("Missing URL", "Paste a Spotify playlist URL first.", parent=self)
             return
 
-        if not credentials_present():
-            messagebox.showinfo(
-                "Credentials needed",
-                "Spotify Web API credentials are required to read playlist metadata. "
-                "The next dialog will let you paste them in.",
-                parent=self,
-            )
-            self._open_credentials_dialog()
-            if not credentials_present():
-                return
+        if not is_signed_in() and not self._open_sign_in():
+            return
+        self._refresh_auth_button()
 
         workdir_text = self.workdir_var.get().strip()
         workdir = Path(workdir_text) if workdir_text else None
@@ -290,37 +364,42 @@ class App(tk.Tk):
         self.combine_button.configure(state="disabled")
         self.status_var.set("Working...")
         self.progress.start(10)
-        self._append_log("=" * 64 + "\n")
+        self._append_pipeline("=" * 64 + "\n")
 
-        def log(msg: str) -> None:
-            self._log_queue.put(msg)
+        def push_pipeline(msg: str) -> None:
+            self._log_queue.put(("P", msg))
+
+        def push_subprocess(msg: str) -> None:
+            self._log_queue.put(("S", msg))
+
+        channels = LogChannels(pipeline=push_pipeline, subprocess=push_subprocess)
 
         def worker() -> None:
             try:
-                _, resolved_workdir = download_playlist(
+                resolved_workdir = download_playlist(
                     url,
                     workdir=workdir,
                     zotify_extra=zotify_extra,
-                    log=log,
+                    channels=channels,
                 )
                 renderer = SlideRenderer()
                 builder = FFmpegVideoBuilder(
                     settings=EncodeSettings(width=width, height=height),
-                    log=log,
+                    log=channels.subprocess,
                 )
                 output = build_video(
                     resolved_workdir,
                     renderer=renderer,
                     builder=builder,
-                    log=log,
+                    channels=channels,
                 )
-                log(f"Done -> {output}")
+                push_pipeline(f"Done -> {output}")
                 self._last_result = (True, str(output))
             except UserFacingError as exc:
-                log(f"Error: {exc}")
+                push_pipeline(f"Error: {exc}")
                 self._last_result = (False, str(exc))
             except Exception as exc:
-                log(f"Unexpected error: {exc}")
+                push_pipeline(f"Unexpected error: {exc}")
                 self._last_result = (False, str(exc))
             finally:
                 self._log_queue.put(None)  # sentinel: pipeline is done
@@ -348,13 +427,12 @@ class App(tk.Tk):
 def main() -> None:
     """Console-script entry point for ``svc-gui``."""
     app = App()
-    if not credentials_present():
+    if not is_signed_in():
         # First-run nudge, but don't block startup.
         app.after(200, lambda: messagebox.showinfo(
             "Welcome",
-            "Welcome! On first run you'll need to paste your Spotify Web API\n"
-            "credentials. Click 'Spotify credentials...' or just hit Combine\n"
-            "and the dialog will appear.",
+            "Welcome! Click 'Sign In' to authorise this app with your Spotify\n"
+            "account. You'll only need to do this once.",
             parent=app,
         ))
     app.mainloop()

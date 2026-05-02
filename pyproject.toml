@@ -20,11 +20,17 @@ classifiers = [
 ]
 dependencies = [
     "click>=8.1",
-    "spotipy>=2.24",
     "Pillow>=12.0",
-    "requests>=2.32",
-    # Zotify (DraftKinner's actively-maintained fork) handles the actual audio
-    # download from Spotify Premium. Pinned to the git URL because it is not on
+    # music-tag is the cross-format tag reader (mp3/ogg/m4a/flac/...) we use
+    # to pull title/artist/album/cover-art back out of zotify's downloads.
+    # It is already a transitive dep via zotify but we depend on it directly
+    # because we read tags ourselves.
+    "music-tag>=0.4",
+    # Zotify (DraftKinner's actively-maintained fork) is our one-stop downloader:
+    # it handles sign-in (via `zotify.OAuth`), playlist scanning, audio download,
+    # and embeds title/artist/album/cover-art into each output file. We reuse
+    # its `OAuth` + `Session` classes for in-app sign-in and shell out to its
+    # CLI for the actual download. Pinned to the git URL because it is not on
     # PyPI; pip will build a wheel locally on install.
     "zotify @ git+https://github.com/DraftKinner/zotify.git",
 ]

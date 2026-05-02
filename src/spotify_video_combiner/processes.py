@@ -22,9 +22,39 @@ from __future__ import annotations
 import subprocess
 import sys
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 
 LogFn = Callable[[str], None]
 SubprocessRunner = Callable[[Sequence[str]], subprocess.CompletedProcess]
+
+
+def _noop(_: str) -> None:  # pragma: no cover - trivial
+    pass
+
+
+@dataclass(frozen=True)
+class LogChannels:
+    """Two log streams: high-level pipeline progress and verbose subprocess output.
+
+    The pipeline drives a small number of ``pipeline`` lines per run (one per
+    significant step) while ffmpeg/zotify subprocess output goes to
+    ``subprocess`` -- which can be very chatty (per-track progress bars,
+    encoder stats). Splitting them lets the GUI keep the user-facing log
+    clean while still surfacing live child-process output in a separate
+    pane. The CLI uses ``LogChannels.single(...)`` to keep both streams in
+    one place (the terminal).
+    """
+
+    pipeline: LogFn
+    subprocess: LogFn
+
+    @classmethod
+    def silent(cls) -> LogChannels:
+        return cls(_noop, _noop)
+
+    @classmethod
+    def single(cls, log: LogFn) -> LogChannels:
+        return cls(log, log)
 
 
 def _no_window_kwargs() -> dict:

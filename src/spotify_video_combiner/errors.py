@@ -13,9 +13,5 @@ class UserFacingError(RuntimeError):
     """Base for expected, actionable errors (missing tools, bad config, etc.)."""
 
 
-class CredentialsError(UserFacingError):
-    """Raised when Spotify Web API credentials cannot be resolved."""
-
-
-class SpotifyApiError(UserFacingError):
-    """Raised when the Spotify Web API rejects a request (bad creds, missing playlist, etc.)."""
+class AuthError(UserFacingError):
+    """Raised when the user is not signed in or sign-in fails."""

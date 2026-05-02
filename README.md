@@ -7,21 +7,22 @@ The output is a 1080p H.264 + AAC video where each track is shown as a still sli
 ```
 [ Spotify playlist URL ]
         │
-        ▼  spotipy (Web API)             ←  metadata, cover-art URLs, playlist order
-[ playlist.json manifest ]
+        ▼  zotify (one subprocess call)   ←  sign-in + scan + audio + embedded cover-art + tags
+[ <NN>.<spotify_id>.ogg  (title/artist/album/cover all embedded) ]
         │
-        ▼  zotify  +  HTTP                ←  per-track audio & cover-art download
-[ audio/<id>.ogg, covers/<id>.jpg ]
+        ▼  music_tag                      ←  read tags + extract cover to <NN>.<spotify_id>.cover.jpg
         │
         ▼  Pillow                         ←  one slide PNG per track
-[ slides/<index>_<id>.png ]
+[ slides/<NNN>_<id>.png ]
         │
         ▼  ffmpeg (loop image + audio)    ←  per-track MP4 segments
-[ segments/<index>_<id>.mp4 ]
+[ segments/<NNN>_<id>.mp4 ]
         │
         ▼  ffmpeg concat demuxer (-c copy)
 [ <Playlist>.mp4 ]                        ←  upload to YouTube unlisted, paste URL into VRChat
 ```
+
+We make zero Spotify Web API calls of our own: zotify handles the entire download (auth, playlist scan, audio + cover art, metadata) in one subprocess invocation, and we just read the resulting files back. There is no JSON manifest — the audio files on disk are the source of truth for both the download and build phases.
 
 There are three ways to run this, in order of "least to do" → "most flexible":
 
@@ -29,7 +30,7 @@ There are three ways to run this, in order of "least to do" → "most flexible":
 2. **[Install script (Windows)](#2-install-script-windows-from-source)** — one PowerShell command sets up a venv with everything.
 3. **[Manual install (any OS)](#3-manual-install-any-os)** — for developers, advanced users, or non-Windows.
 
-You'll need a Spotify Premium account (zotify uses it to download audio) and free Spotify Web API credentials (read once on first run; see [Spotify credentials](#spotify-credentials)).
+You'll need a Spotify Premium account. The first time you run the app it pops a browser tab so you can authorise it; the resulting session is cached locally and reused on every subsequent run (see [Signing in](#signing-in)).
 
 ---
 
@@ -40,12 +41,12 @@ Download `svc-gui.exe` from the [latest release](https://github.com/OstlerDev/sp
 The bundle contains:
 - The Tkinter GUI
 - A full Python runtime
-- Every Python dependency (zotify, librespot, spotipy, Pillow, ...)
+- Every Python dependency (zotify, librespot, music_tag, Pillow, ...)
 - A static `ffmpeg.exe`
 
 So nothing else to install — just run.
 
-**First run:** the GUI prompts you to paste your Spotify Web API Client ID + Secret (one-time setup, stored at `%APPDATA%\spotify-video-combiner\credentials.env`). When the first track download starts, zotify pops a console window asking for your Spotify Premium **username + password**, then gives you an OAuth login URL to authorise (also one-time; the resulting token is cached at `%APPDATA%\Zotify\credentials.json`). On subsequent runs zotify uses the cached token silently — no console window, log output streams into the GUI.
+**First run:** click **Sign In** in the GUI. A browser tab opens at `accounts.spotify.com`; sign in and approve the app, and a localhost callback returns control to the GUI. The resulting session is cached at `%APPDATA%\Zotify\credentials.json` and reused for both metadata reads and audio downloads. No developer credentials, no console pop-ups — one click.
 
 To build the `.exe` yourself:
 
@@ -78,6 +79,7 @@ When it finishes, activate the venv and you have both interfaces:
 ```powershell
 . .venv\Scripts\Activate.ps1
 svc-gui                                                # GUI
+svc signin                                             # one-time: authorise this app
 svc all https://open.spotify.com/playlist/<id>         # CLI
 ```
 
@@ -103,7 +105,7 @@ pip install -e .
 ```
 
 You now have three executables on PATH:
-- `svc` — the CLI (with `download`, `build`, `all` subcommands)
+- `svc` — the CLI (with `signin`, `signout`, `download`, `build`, `all` subcommands)
 - `svc-gui` — the Tkinter GUI
 - `zotify` — the underlying audio downloader (rarely called directly)
 
@@ -111,33 +113,33 @@ You now have three executables on PATH:
 
 ---
 
-## Spotify credentials
+## Signing in
 
-Two sets of credentials are needed, used for different things:
+A single sign-in covers everything — both metadata reads and audio downloads use the same OAuth session, so there are no developer credentials to manage and no separate username prompt.
 
-| Credential | What it's for | How to set it |
+| Interface | Sign in | Sign out |
 |---|---|---|
-| **Spotify Web API app** (free) | Read playlist metadata, cover art URLs | Get from https://developer.spotify.com/dashboard, paste into the GUI's credentials dialog or `credentials.env` |
-| **Spotify Premium account** | Download track audio (handled by zotify) | zotify prompts you on its first run |
+| GUI | Click **Sign In** | Click **Sign Out** |
+| CLI | `svc signin` | `svc signout` |
 
-For the Web API, the tool searches in this order:
+Either way, your default browser opens at `accounts.spotify.com/authorize`, and after you approve a localhost callback (`http://127.0.0.1:4381/login`) writes a librespot credentials file at:
 
-1. Environment variables (`SPOTIPY_CLIENT_ID`, `SPOTIPY_CLIENT_SECRET`)
-2. `./credentials.env` in the current directory (project-local override)
-3. `<user-config>/spotify-video-combiner/credentials.env`:
-   - Windows: `%APPDATA%\spotify-video-combiner\credentials.env`
-   - macOS: `~/Library/Application Support/spotify-video-combiner/credentials.env`
-   - Linux: `~/.config/spotify-video-combiner/credentials.env`
+- Windows: `%APPDATA%\Zotify\credentials.json`
+- macOS: `~/Library/Application Support/Zotify/credentials.json`
+- Linux: `$XDG_CONFIG_HOME/zotify/credentials.json` or `~/.config/zotify/credentials.json`
 
-If nothing is found, a blank template file is auto-created at the user-config location and the tool prints a clear error pointing you at it. The GUI shows a setup dialog instead.
+That same file is what the underlying [`zotify`](https://github.com/DraftKinner/zotify) tool reads, so signing in here works for direct `zotify` invocations too (and vice-versa).
 
-> **Note on legality:** zotify uses your own Premium account credentials to stream and decrypt audio, which is in a grey area with respect to Spotify's Terms of Service. This project is for personal, archival, and accessibility use only. Don't redistribute the resulting MP4s.
+> **Note on legality:** the audio downloader uses your own Premium account credentials to stream and decrypt audio, which is in a grey area with respect to Spotify's Terms of Service. This project is for personal, archival, and accessibility use only. Don't redistribute the resulting MP4s.
 
 ---
 
 ## CLI reference
 
 ```bash
+# Authorise this app to read your Spotify (one-time)
+svc signin
+
 # All-in-one: download + build
 svc all <playlist-url> [--workdir DIR] [--output FILE] [--font FILE] [--zotify-arg=ARG]...
 
@@ -146,6 +148,9 @@ svc download <playlist-url> [--workdir DIR] [--zotify-arg=ARG]...
 
 # Just build the MP4 from a previously-downloaded workdir
 svc build <workdir> [--output FILE] [--font FILE]
+
+# Forget the cached session
+svc signout
 ```
 
 `<playlist-url>` accepts any of: an `open.spotify.com` URL, a `spotify:playlist:` URI, or a bare 22-character playlist ID.
@@ -161,15 +166,14 @@ svc download <url> --zotify-arg=--bulk-wait-time=30
 
 ```
 output/<Playlist Name>/
-├── playlist.json                         # manifest (playlist + tracks + relative paths)
-├── audio/<spotify-id>.ogg                # one audio file per track (zotify output)
-├── covers/<spotify-id>.jpg               # high-resolution cover art (Spotify CDN)
+├── <NN>.<spotify-id>.ogg                 # zotify output: audio with embedded title/artist/album/cover-art
+├── <NN>.<spotify-id>.cover.jpg           # cover art extracted from the audio file (lazy, on first build)
 ├── slides/<NNN>_<spotify-id>.png         # rendered 1920x1080 slide per track
 ├── segments/<NNN>_<spotify-id>.mp4       # encoded per-track MP4 segments
 └── <Playlist Name>.mp4                   # final concatenated video
 ```
 
-Every layer is **idempotent** — re-running after a partial failure only redoes what's missing.
+The audio files themselves are the source of truth — no separate `playlist.json` manifest. Re-running picks up where it left off: zotify's own `--skip-previous` skips already-downloaded tracks (it scans embedded `spotid` metadata), and the slide / segment / concat steps each skip outputs that already exist on disk. A re-run after a partial failure only redoes what's missing.
 
 ---
 
@@ -177,32 +181,30 @@ Every layer is **idempotent** — re-running after a partial failure only redoes
 
 ### Why this stack?
 
-- **`spotipy`** for metadata — clean access to playlist ordering and the highest-resolution cover art URL via the Spotify Web API. Free developer app, no user login.
-- **`zotify`** for audio — only practical way to download Spotify-quality audio. Uses your own Premium credentials via [`librespot`](https://github.com/librespot-org/librespot). Original `zotify-dev/zotify` is abandoned; this depends on the actively-maintained [`DraftKinner/zotify`](https://github.com/DraftKinner/zotify) fork.
+- **`zotify` (one-stop downloader)** — its `OAuth` + `Session` classes drive the PKCE flow against `accounts.spotify.com` for sign-in (we call those classes directly so the GUI button works), and a single `zotify` subprocess invocation then handles the entire playlist: scanning, per-track audio download, and embedding `title` / `artist` / `album` / cover-art into each output file as standard metadata. We make zero Spotify Web API calls ourselves, which dodges the librespot-OAuth Web-API rate limits entirely. Original `zotify-dev/zotify` is abandoned; this depends on the actively-maintained [`DraftKinner/zotify`](https://github.com/DraftKinner/zotify) fork.
+- **`music_tag`** for reading back the tags + cover art zotify embedded — a thin, format-independent wrapper over mutagen so we don't have to care whether the user picked OGG, MP3, M4A, or FLAC.
 - **`Pillow`** for slides — composes a 1080p frame per track: blurred dimmed cover-art background + centered cover + auto-sized title/artist text. Renders to a single PNG so ffmpeg only deals with images, never fonts (avoiding fontconfig hell on Windows).
 - **`ffmpeg`** for encoding — `-loop 1 ... -shortest` produces a fixed-image segment matching each track's audio length. Because every frame within a segment is byte-identical, we run libx264 with `-preset veryfast -r 2 -tune stillimage`: a 4-minute track becomes 480 frames instead of 7,200, and the encoder spends no time on motion estimation it would only confirm is zero. Real-world segments encode in 1-3 s on a modern CPU. Every segment is produced with identical codec parameters, so the final concat step uses `-c copy` (stream-copy, no re-encode).
-- **PyInstaller** for the `.exe` — `--onefile` produces a single binary; ffmpeg is bundled under `binaries/`, zotify ships as a Python package, and the bundle re-enters itself with a `--zotify-mode` flag (allocating a console at runtime via `AllocConsole`) when zotify needs to run.
+- **PyInstaller** for the `.exe` — `--onefile` produces a single binary; ffmpeg is bundled under `binaries/`, zotify ships as a Python package, and the bundle re-enters itself with a `--zotify-mode` flag when zotify needs to run.
 
 ### Module map
 
 | Module | Responsibility |
 |---|---|
-| `manifest` | The on-disk `playlist.json` data model and filename sanitisation. |
-| `spotify` | spotipy wrapper that returns our domain `Playlist` object. |
-| `audio` | Subprocess wrapper around zotify (auto-installs it via pip if missing). |
-| `covers` | Plain HTTP cover-art downloader. |
-| `slides` | Pillow-based slide renderer (blurred bg + cover + text). |
+| `auth` | Sign-in / sign-out via zotify's `OAuth` + librespot `Session`. Caches the session for in-process reuse. |
+| `audio` | Subprocess wrapper around zotify; one call downloads the whole playlist. Auto-installs zotify via pip if missing. |
+| `tracks` | Reads `music_tag` metadata back out of zotify's downloads + extracts cover art to sibling `.jpg/.png` files. |
+| `slides` | Pillow-based slide renderer (blurred bg + cover + title/artist text). |
 | `video` | ffmpeg subprocess wrapper: per-track segment encode + concat. |
-| `pipeline` | Orchestration: `download_playlist` and `build_video` workflows. |
-| `processes` | Window-suppressing subprocess runners; line-streams child stdio into a log callback. |
+| `pipeline` | Orchestration: `download_playlist` (zotify) and `build_video` (slides + ffmpeg). |
+| `processes` | Window-suppressing subprocess runners + the `LogChannels` split (pipeline progress vs. subprocess output). |
 | `cli` | Click adapter (CLI). Also handles the `--zotify-mode` proxy in frozen builds. |
-| `gui` | Tkinter GUI with threaded pipeline runner + credentials setup dialog. |
+| `gui` | Tkinter GUI with threaded pipeline runner, sign-in dialog, and a paned dual-log widget. |
 | `bundled` | Locate binaries that may live inside `sys._MEIPASS`. |
 | `installer` | Self-bootstrap zotify via pip when missing. |
-| `config` | Load `credentials.env` from project-local + user-config locations. |
 | `errors` | `UserFacingError` hierarchy that the CLI renders cleanly (no traceback). |
 
-External processes (`zotify`, `ffmpeg`) are wrapped behind injectable `runner` callables so the entire pipeline is unit-testable without spawning real subprocesses. From the GUI, those runners stream child output line-by-line into the log widget instead of popping focus-stealing console windows.
+External processes (`zotify`, `ffmpeg`) are wrapped behind injectable `runner` callables so the entire pipeline is unit-testable without spawning real subprocesses. From the GUI, those runners stream child output line-by-line into the bottom log pane (capped to ~500 lines so it never grows unbounded), while the top pane shows only high-level pipeline progress.
 
 ---
 
@@ -215,7 +217,7 @@ ruff check src tests                                              # lint
 pytest --cov=spotify_video_combiner --cov-report=term-missing     # coverage
 ```
 
-The test suite (~150 tests) covers manifest serialisation, URL parsing, command construction, file idempotency, slide rendering, frozen-mode dispatch, credentials file parsing, error translation, the subprocess window-suppression + stream-to-log helpers, and a real ffmpeg integration test that produces a tiny end-to-end MP4. External services (Spotify API, zotify subprocess, network) are mocked.
+The test suite (~140 tests) covers manifest serialisation, URL parsing, command construction, file idempotency, slide rendering, frozen-mode dispatch, sign-in state, error translation, the subprocess window-suppression + stream-to-log helpers, and a real ffmpeg integration test that produces a tiny end-to-end MP4. External services (Spotify API, zotify subprocess, network) are mocked.
 
 ### Building the .exe
 
