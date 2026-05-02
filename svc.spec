@@ -24,12 +24,19 @@ from PyInstaller.utils.hooks import collect_all, collect_submodules
 block_cipher = None
 project_root = Path.cwd()
 ffmpeg_path = project_root / "build" / "ffmpeg.exe"
+app_icon_png = project_root / "assets" / "app-icon.png"
+app_icon_ico = project_root / "assets" / "app-icon.ico"
 
 binaries = []
 if ffmpeg_path.is_file():
     binaries.append((str(ffmpeg_path), "binaries"))
 
 datas = []
+if app_icon_png.is_file():
+    datas.append((str(app_icon_png), "assets"))
+if app_icon_ico.is_file():
+    datas.append((str(app_icon_ico), "assets"))
+
 hiddenimports = collect_submodules("zotify") + collect_submodules("librespot")
 
 for pkg in ("zotify", "librespot", "music_tag"):
@@ -76,4 +83,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(app_icon_ico) if app_icon_ico.is_file() else None,
 )

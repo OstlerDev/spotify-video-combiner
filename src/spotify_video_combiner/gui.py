@@ -21,11 +21,13 @@ import queue
 import threading
 import tkinter as tk
 import webbrowser
+from contextlib import suppress
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
 from . import __version__
 from .auth import current_username, is_signed_in, sign_in, sign_out
+from .bundled import resolve_asset
 from .errors import UserFacingError
 from .pipeline import build_video, download_playlist
 from .processes import LogChannels
@@ -33,6 +35,8 @@ from .slides import SlideRenderer
 from .video import EncodeSettings, FFmpegVideoBuilder
 
 WINDOW_TITLE = "Spotify Video Combiner"
+APP_ICON_PNG = "app-icon.png"
+# APP_ICON_ICO = "app-icon.ico"
 DEFAULT_RESOLUTIONS: dict[str, tuple[int, int]] = {
     "1080p (1920x1080)": (1920, 1080),
     "1440p (2560x1440)": (2560, 1440),
@@ -55,6 +59,51 @@ SUBPROCESS_LOG_MAX_LINES = 500  # ring-buffer cap for the verbose subprocess pan
 # Tag for log queue items. ``"P"`` => pipeline (top pane), ``"S"`` => subprocess
 # (bottom pane), ``None`` => sentinel meaning "pipeline finished".
 _LogItem = tuple[str, str] | None
+
+
+APP_USER_MODEL_ID = "dev.skyrior.spotify-video-combiner"
+"""Stable Windows taskbar/grouping identity. Without this, PyInstaller's
+``%TEMP%``-extracted onefile bundles get a fresh ID per run and Windows falls
+back to a scaled generic icon instead of using the embedded .ico."""
+
+
+def _set_app_user_model_id() -> None:
+    """Pin the Windows taskbar identity so it consistently uses our .exe icon."""
+    if os.name != "nt":
+        return
+    with suppress(OSError, AttributeError):
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+
+
+def _set_window_icon(window: tk.Tk) -> None:
+    """Apply the packaged app icon to ``window`` using the best per-platform path.
+
+    On Windows we hand Tk the multi-resolution ``.ico`` via ``iconbitmap``; the
+    OS then picks the right embedded entry per DPI/usage (titlebar, taskbar,
+    Alt-Tab). We deliberately skip ``iconphoto`` there because it would
+    overwrite the multi-size icon with a single 256x256 bitmap that Windows
+    has to downscale for every small-icon slot.
+
+    On macOS / Linux Tk does not understand ``.ico``, so we fall back to the
+    PNG via ``iconphoto``.
+    """
+    # including it as an ico fucks things up and makes it blurry due to tk bug, so just set the png.
+    # if os.name == "nt":
+    #     icon_ico = resolve_asset(APP_ICON_ICO)
+    #     if icon_ico is not None:
+    #         with suppress(tk.TclError):
+    #             window.iconbitmap(default=str(icon_ico))
+    #             return
+
+    icon_png = resolve_asset(APP_ICON_PNG)
+    if icon_png is None:
+        return
+    with suppress(tk.TclError):
+        icon = tk.PhotoImage(file=str(icon_png))
+        window.iconphoto(True, icon)
+        window._app_icon = icon  # type: ignore[attr-defined]
 
 
 # --- Sign-in dialog ----------------------------------------------------------
@@ -157,8 +206,10 @@ class SignInDialog(tk.Toplevel):
 
 class App(tk.Tk):
     def __init__(self) -> None:
+        _set_app_user_model_id()
         super().__init__()
         self.title(f"{WINDOW_TITLE}  v{__version__}")
+        _set_window_icon(self)
         self.geometry("780x620")
         self.minsize(680, 540)
 

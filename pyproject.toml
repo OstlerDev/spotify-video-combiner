@@ -61,6 +61,10 @@ allow-direct-references = true
 [tool.hatch.build.targets.wheel]
 packages = ["src/spotify_video_combiner"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"assets/app-icon.png" = "spotify_video_combiner/assets/app-icon.png"
+"assets/app-icon.ico" = "spotify_video_combiner/assets/app-icon.ico"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"

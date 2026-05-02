@@ -1,4 +1,4 @@
-"""Helpers for locating binaries that may be bundled inside a PyInstaller ``.exe``.
+"""Helpers for locating resources that may be bundled inside a PyInstaller ``.exe``.
 
 When packaged with ``pyinstaller --onefile``, external tools like ``ffmpeg``
 and ``zotify`` get extracted at runtime into ``sys._MEIPASS``. We look there
@@ -21,6 +21,9 @@ ZOTIFY_PROXY_FLAG = "--zotify-mode"
 
 BUNDLED_BIN_SUBDIR = "binaries"
 """Sub-directory inside ``sys._MEIPASS`` where we stash bundled ``.exe`` files."""
+
+BUNDLED_ASSET_SUBDIR = "assets"
+"""Sub-directory where application assets are stored in source and frozen builds."""
 
 
 def is_frozen() -> bool:
@@ -52,3 +55,20 @@ def find_bundled_binary(name: str) -> str | None:
 def resolve_binary(name: str) -> str | None:
     """Find ``name`` as a bundled binary first, then anywhere on ``PATH``."""
     return find_bundled_binary(name) or shutil.which(name)
+
+
+def resolve_asset(name: str) -> Path | None:
+    """Find an app asset in the frozen bundle, installed package, or source tree."""
+    candidates: list[Path] = []
+    root = bundled_resource_root()
+    if root is not None:
+        candidates.append(root / BUNDLED_ASSET_SUBDIR / name)
+
+    package_root = Path(__file__).resolve().parent
+    candidates.append(package_root / BUNDLED_ASSET_SUBDIR / name)
+    candidates.append(package_root.parents[1] / BUNDLED_ASSET_SUBDIR / name)
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None

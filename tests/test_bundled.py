@@ -76,3 +76,23 @@ class TestResolveBinary:
         monkeypatch.setattr("spotify_video_combiner.bundled.shutil.which", lambda _: None)
 
         assert bundled.resolve_binary("ffmpeg") is None
+
+
+class TestResolveAsset:
+    def test_prefers_asset_from_bundle(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        asset_dir = tmp_path / bundled.BUNDLED_ASSET_SUBDIR
+        asset_dir.mkdir()
+        bundled_icon = asset_dir / "app-icon.png"
+        bundled_icon.write_bytes(b"icon")
+        monkeypatch.setattr("sys._MEIPASS", str(tmp_path), raising=False)
+
+        assert bundled.resolve_asset("app-icon.png") == bundled_icon
+
+    def test_finds_source_tree_icon(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delattr("sys._MEIPASS", raising=False)
+
+        result = bundled.resolve_asset("app-icon.png")
+
+        assert result is not None
+        assert result.name == "app-icon.png"
+        assert result.is_file()
