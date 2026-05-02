@@ -31,6 +31,7 @@ class TrackSpec:
     artwork: bytes | None = None
     artwork_fmt: str = "jpeg"
     ext: str = "ogg"
+    duration: float | None = None
 
     @property
     def filename(self) -> str:
@@ -163,6 +164,8 @@ def make_fake_workdir(tmp_path: Path, fake_music_tag: dict):
             }
             if spec.artwork is not None:
                 tag_kwargs["artwork"] = FakeArtwork(spec.artwork, spec.artwork_fmt)
+            if spec.duration is not None:
+                tag_kwargs["#length"] = spec.duration
             fake_music_tag[audio_path] = FakeTags(**tag_kwargs)
         return FakeWorkdir(workdir=workdir, track_specs=spec_list, audio_paths=paths)
 

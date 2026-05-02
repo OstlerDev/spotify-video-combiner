@@ -91,6 +91,26 @@ class TestFFmpegVideoBuilder:
             "preset 'medium' or slower spends time predicting frames that never change"
         )
 
+    def test_segment_bounds_loop_to_audio_duration(self, tmp_path: Path) -> None:
+        """When the audio duration is known we cap the looped image with ``-t``.
+
+        Without this, ffmpeg's ``-loop 1`` + ``-shortest`` interaction can leave
+        ~30 s of silent video tail per song (ffmpeg trac #2622).
+        """
+        seg = Segment(tmp_path / "i.png", tmp_path / "a.ogg", tmp_path / "o.mp4", audio_duration=42.5)
+        cmd = FFmpegVideoBuilder().build_segment_command(seg)
+
+        loop_idx = cmd.index("-loop")
+        image_idx = cmd.index("-i")
+        t_idx = cmd.index("-t")
+        assert loop_idx < t_idx < image_idx, "-t must apply to the looped image input"
+        assert float(cmd[t_idx + 1]) == pytest.approx(42.5)
+
+    def test_segment_omits_t_when_duration_unknown(self, tmp_path: Path) -> None:
+        seg = Segment(tmp_path / "i.png", tmp_path / "a.ogg", tmp_path / "o.mp4")
+        cmd = FFmpegVideoBuilder().build_segment_command(seg)
+        assert "-t" not in cmd
+
     def test_keyframe_interval_emits_g_flag_only_when_set(self, tmp_path: Path) -> None:
         seg = Segment(tmp_path / "i.png", tmp_path / "a.ogg", tmp_path / "o.mp4")
 

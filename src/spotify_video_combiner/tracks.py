@@ -62,6 +62,7 @@ class Track:
     artists: list[str]
     album: str
     cover_path: Path | None = None
+    duration: float | None = None  # seconds; None when unreadable
 
     @property
     def artists_joined(self) -> str:
@@ -105,7 +106,7 @@ def read_tracks(workdir: Path) -> list[Track]:
         index = int(match.group("index"))
         spotid = match.group("spotid")
 
-        title, artists, album = _read_text_tags(audio_path)
+        title, artists, album, duration = _read_text_tags(audio_path)
         cover_path = _ensure_cover_extracted(audio_path)
 
         tracks.append(
@@ -117,22 +118,38 @@ def read_tracks(workdir: Path) -> list[Track]:
                 artists=artists or ["Unknown Artist"],
                 album=album,
                 cover_path=cover_path,
+                duration=duration,
             )
         )
     return tracks
 
 
-def _read_text_tags(audio_path: Path) -> tuple[str, list[str], str]:
-    """Return ``(title, artists, album)`` from an audio file's embedded tags."""
+def _read_text_tags(audio_path: Path) -> tuple[str, list[str], str, float | None]:
+    """Return ``(title, artists, album, duration_seconds)`` from embedded tags."""
     try:
         tags = music_tag.load_file(audio_path)
     except (OSError, ValueError):  # pragma: no cover - corrupt file
-        return ("", [], "")
+        return ("", [], "", None)
     title = _string_tag(tags, "title")
     raw_artists = _string_tag(tags, "artist")
     artists = [a.strip() for a in raw_artists.split(",") if a.strip()] if raw_artists else []
     album = _string_tag(tags, "album")
-    return title, artists, album
+    return title, artists, album, _length_tag(tags)
+
+
+def _length_tag(tags: object) -> float | None:
+    """Read the ``#length`` field exposed by music_tag for any container."""
+    try:
+        value = tags["#length"].value  # type: ignore[index]
+    except (KeyError, AttributeError):
+        return None
+    if value is None:
+        return None
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    return seconds if seconds > 0 else None
 
 
 def _string_tag(tags: object, name: str) -> str:

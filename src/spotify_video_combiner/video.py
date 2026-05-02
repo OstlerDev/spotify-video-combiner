@@ -63,11 +63,19 @@ class EncodeSettings:
 
 @dataclass(frozen=True)
 class Segment:
-    """One slide+audio pair to encode."""
+    """One slide+audio pair to encode.
+
+    ``audio_duration`` (seconds) bounds the looped still image to the audio
+    length. Without it ffmpeg's ``-shortest`` plus ``-loop 1`` can leave up
+    to ~30 s of silent video tail at low fps (ffmpeg trac #2622): the image
+    demuxer pre-buffers frames before noticing the audio EOF, and those
+    buffered frames get muxed out as silence between songs.
+    """
 
     image_path: Path
     audio_path: Path
     output_path: Path
+    audio_duration: float | None = None
 
 
 class FFmpegVideoBuilder:
@@ -104,14 +112,18 @@ class FFmpegVideoBuilder:
 
     def build_segment_command(self, segment: Segment) -> list[str]:
         s = self.settings
+        loop_input: list[str] = ["-loop", "1", "-framerate", str(s.fps)]
+        if segment.audio_duration is not None:
+            # Bound the looped image to the audio length so ``-shortest`` has a
+            # finite video stream to compare against (see Segment docstring).
+            loop_input += ["-t", f"{segment.audio_duration:.6f}"]
         cmd = [
             self._executable,
             "-y",
             "-hide_banner",
             "-loglevel", "error",
             "-stats",
-            "-loop", "1",
-            "-framerate", str(s.fps),
+            *loop_input,
             "-i", str(segment.image_path),
             "-i", str(segment.audio_path),
             "-map", "0:v:0",

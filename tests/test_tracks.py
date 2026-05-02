@@ -131,6 +131,17 @@ class TestReadTracks:
         tracks = read_tracks(fw.workdir)
         assert tracks[0].cover_path is None
 
+    def test_reads_duration_from_length_tag(
+        self,
+        track_specs: list[TrackSpec],
+        make_fake_workdir,
+    ) -> None:
+        track_specs[0].duration = 123.45
+        fw: FakeWorkdir = make_fake_workdir(track_specs)
+        tracks = read_tracks(fw.workdir)
+        assert tracks[0].duration == pytest.approx(123.45)
+        assert tracks[1].duration is None  # no #length tag set
+
     def test_falls_back_when_tags_missing(
         self,
         tmp_path: Path,

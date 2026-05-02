@@ -99,7 +99,7 @@ def download_playlist(
         workdir = default_workdir(name)
 
     channels.pipeline(f"Downloading playlist via zotify -> {workdir}")
-    channels.pipeline(f"Note: There is a pause between song downloads to stay within Spotify rate limits. You may see repeated 'Fetching Track...' logs during api limit pauses.")
+    channels.pipeline(f"Note: There is a ~30s pause between song downloads to stay within Spotify rate limits. You may see repeated 'Fetching Track...' logs during api limit pauses.")
     downloader.download(playlist_url, workdir)
     return workdir
 
@@ -167,6 +167,8 @@ def _encode_track(
         channels.pipeline(f"Cached    {track.index:02d}/{total}: {track.slug}")
     else:
         channels.pipeline(f"Encoding  {track.index:02d}/{total}: {track.slug}")
-        builder.encode_segment(Segment(slide_path, track.audio_path, segment_path))
+        builder.encode_segment(
+            Segment(slide_path, track.audio_path, segment_path, audio_duration=track.duration)
+        )
 
     return segment_path

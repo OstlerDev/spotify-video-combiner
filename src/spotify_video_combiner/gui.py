@@ -16,6 +16,7 @@ no developer credentials, no console pop-up, no second auth step.
 
 from __future__ import annotations
 
+import os
 import queue
 import threading
 import tkinter as tk
@@ -231,7 +232,7 @@ class App(tk.Tk):
         ttk.Label(outer, textvariable=self.status_var, foreground="gray").grid(
             row=7, column=0, columnspan=3, sticky="w", pady=(8, 4)
         )
-        self.progress = ttk.Progressbar(outer, mode="indeterminate")
+        self.progress = ttk.Progressbar(outer, mode="determinate")
         self.progress.grid(row=8, column=0, columnspan=3, sticky="ew", pady=(0, 8))
 
         # Two log panes split by a draggable divider:
@@ -364,6 +365,7 @@ class App(tk.Tk):
         self.combine_button.configure(state="disabled")
         self.status_var.set("Working...")
         self.progress.start(10)
+        self._append_pipeline("Starting up app...\n")
         self._append_pipeline("=" * 64 + "\n")
 
         def push_pipeline(msg: str) -> None:
@@ -376,23 +378,36 @@ class App(tk.Tk):
 
         def worker() -> None:
             try:
+                push_pipeline("Downloading playlist... (this may take a while)\n")
                 resolved_workdir = download_playlist(
                     url,
                     workdir=workdir,
                     zotify_extra=zotify_extra,
                     channels=channels,
                 )
+                push_pipeline("Done downloading playlist.\n")
+
+                # set the progress to 50%
+                self.progress.configure(value=50)
+                push_pipeline("Rendering cover art slides...\n")
                 renderer = SlideRenderer()
+                # set the progress to 60%
+                self.progress.configure(value=60)
+                push_pipeline("Encoding video segments...\n")
                 builder = FFmpegVideoBuilder(
                     settings=EncodeSettings(width=width, height=height),
                     log=channels.subprocess,
                 )
+                # set the progress to 60%
+                self.progress.configure(value=90)
                 output = build_video(
                     resolved_workdir,
                     renderer=renderer,
                     builder=builder,
                     channels=channels,
                 )
+                # set the progress to 100%
+                self.progress.configure(value=100)
                 push_pipeline(f"Done -> {output}")
                 self._last_result = (True, str(output))
             except UserFacingError as exc:
@@ -419,6 +434,8 @@ class App(tk.Tk):
         if success:
             self.status_var.set(f"Done: {payload}")
             messagebox.showinfo("Combine complete", f"Wrote:\n{payload}", parent=self)
+            # open the folder containing the output file
+            os.startfile(os.path.dirname(payload))
         else:
             self.status_var.set("Failed.")
             messagebox.showerror("Combine failed", payload, parent=self)
