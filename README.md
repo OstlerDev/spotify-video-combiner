@@ -36,7 +36,7 @@ You'll need a Spotify Premium account. The first time you run the app it pops a 
 
 ## 1. Single .exe (Windows)
 
-Download `svc-gui.exe` from the [latest release](https://github.com/OstlerDev/spotify-video-combiner/releases) (or build it yourself with `build_exe.ps1` — see below). Double-click to launch.
+Download `svc-gui.exe` from the [latest release](https://github.com/OstlerDev/spotify-video-combiner/releases) (built and attached automatically by [`.github/workflows/release.yml`](.github/workflows/release.yml) every time a release is published — or build it yourself with `build_exe.ps1`, see below). Double-click to launch.
 
 The bundle contains:
 - The Tkinter GUI
