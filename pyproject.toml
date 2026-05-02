@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "spotify-video-combiner"
-version = "0.1.0"
+version = "1.0.0"
 description = "Download a Spotify playlist's audio + cover art and combine it into a single MP4 (built for VRChat-via-YouTube use)."
 readme = "README.md"
 license = { file = "LICENSE" }
