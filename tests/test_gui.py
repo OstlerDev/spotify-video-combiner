@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -52,3 +53,20 @@ class TestStaticChoices:
             assert "--audio-format=" in joined, f"{label!r} should use --audio-format=<value>"
             value = joined.split("--audio-format=", 1)[1].split()[0]
             assert value in valid_formats, f"{label!r} maps to invalid format {value!r}"
+
+
+class TestToggleAuth:
+    """Drive ``App._toggle_auth`` without a real Tk root via a mock ``self``."""
+
+    def test_sign_out_refreshes_button(self) -> None:
+        path = auth.credentials_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"username": "alice"}), encoding="utf-8")
+
+        app = MagicMock()
+        with patch.object(gui.messagebox, "askyesno", return_value=True):
+            gui.App._toggle_auth(app)
+
+        assert not auth.is_signed_in()
+        app._append_pipeline.assert_called_once_with("Signed out.\n")
+        app._refresh_auth_button.assert_called_once()

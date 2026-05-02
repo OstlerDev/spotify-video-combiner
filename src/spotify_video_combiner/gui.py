@@ -291,7 +291,7 @@ class App(tk.Tk):
             ):
                 return
             sign_out()
-            self._append_log("Signed out.\n")
+            self._append_pipeline("Signed out.\n")
         else:
             self._open_sign_in()
         self._refresh_auth_button()
