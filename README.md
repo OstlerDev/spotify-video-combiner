@@ -1,5 +1,6 @@
 # Spotify Video Combiner
 
+
 Turn any Spotify playlist into a single video file! This tool downloads the audio and cover art for every track in a Spotify playlist and combines them into one seamless video. 
 
 This is perfect for **playing Spotify playlists in VRChat worlds** — just upload the final video to YouTube as an unlisted video and paste the link into a VRChat video player.
@@ -8,6 +9,14 @@ The final video features:
 - High-quality audio for every track.
 - A beautiful 1080p slide showing the track's cover art, title, and artist.
 - Seamless transitions between songs, in exact playlist order.
+
+*(Screenshot of app)*
+
+![](assets/app-example.jpg)
+
+*(Example song slide image)*
+
+![](assets/slide-example.png)
 
 ## Getting Started
 
@@ -27,7 +36,7 @@ You will need a Spotify account to use this tool.
 3. Log in with your Spotify account and authorize the application.
 4. You only need to do this once! The app will securely remember your sign-in for future use.
 
-*(Note: If you want to sign out later, just click the **Sign Out** button in the app).*
+*(Note: Non-premium accounts are limited to **160kbps**, Premium accounts get full **320kbps** audio).*
 
 ### 3. Create Your Video
 
