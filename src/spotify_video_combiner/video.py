@@ -96,17 +96,28 @@ class FFmpegVideoBuilder:
         log: LogFn | None = None,
     ) -> None:
         self._executable = executable
+        self._resolved: str | None = None
         self.settings = settings or EncodeSettings()
         self._runner = runner or make_runner(log, check=True)
 
     def ensure_available(self) -> str:
-        resolved = resolve_binary(self._executable)
-        if resolved is None:
-            raise FFmpegError(
-                f"`{self._executable}` is not available. Install ffmpeg from https://ffmpeg.org/ "
-                "and make sure it is on your PATH (or use the bundled installer/.exe build)."
-            )
-        return resolved
+        """Resolve and memoise the absolute path to the ffmpeg binary.
+
+        Frozen ``svc-gui.exe`` builds ship ffmpeg under ``<_MEIPASS>/binaries``
+        which is *not* on the user's ``PATH``, so command builders must use
+        the resolved absolute path -- spawning the bare name ``"ffmpeg"`` would
+        leave Windows' ``CreateProcess`` to search ``PATH`` and fail with
+        ``[WinError 2]`` on machines without a system ffmpeg.
+        """
+        if self._resolved is None:
+            resolved = resolve_binary(self._executable)
+            if resolved is None:
+                raise FFmpegError(
+                    f"`{self._executable}` is not available. Install ffmpeg from https://ffmpeg.org/ "
+                    "and make sure it is on your PATH (or use the bundled installer/.exe build)."
+                )
+            self._resolved = resolved
+        return self._resolved
 
     # --- segment encode -------------------------------------------------
 
@@ -118,7 +129,7 @@ class FFmpegVideoBuilder:
             # finite video stream to compare against (see Segment docstring).
             loop_input += ["-t", f"{segment.audio_duration:.6f}"]
         cmd = [
-            self._executable,
+            self._resolved or self._executable,
             "-y",
             "-hide_banner",
             "-loglevel", "error",
@@ -160,7 +171,7 @@ class FFmpegVideoBuilder:
 
     def build_concat_command(self, list_file: Path, output: Path) -> list[str]:
         return [
-            self._executable,
+            self._resolved or self._executable,
             "-y",
             "-hide_banner",
             "-loglevel", "error",

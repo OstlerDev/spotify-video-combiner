@@ -1,6 +1,5 @@
 # Spotify Video Combiner
 
-
 Turn any Spotify playlist into a single video file! This tool downloads the audio and cover art for every track in a Spotify playlist and combines them into one seamless video. 
 
 This is perfect for **playing Spotify playlists in VRChat worlds** — just upload the final video to YouTube as an unlisted video and paste the link into a VRChat video player.

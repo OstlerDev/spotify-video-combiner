@@ -166,6 +166,31 @@ class TestFFmpegVideoBuilder:
         assert len(runner.calls) == 1
         assert out.is_file()
 
+    def test_subprocess_uses_resolved_path_not_bare_name(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Frozen builds ship ffmpeg outside ``PATH`` (under ``_MEIPASS/binaries``).
+
+        Regression: ``ensure_available()`` used to return the resolved path but
+        throw it away, leaving ``build_*_command`` to spawn the bare ``"ffmpeg"``
+        name -- which Windows' ``CreateProcess`` then failed to find with
+        ``[WinError 2]`` on any machine without a system-wide ffmpeg install.
+        Both segment encoding and concat must use the resolved absolute path.
+        """
+        bundled = "/fake/meipass/binaries/ffmpeg.exe"
+        monkeypatch.setattr("spotify_video_combiner.video.resolve_binary", lambda _: bundled)
+        runner = FakeRunner()
+        builder = FFmpegVideoBuilder(runner=runner)
+
+        seg_out = tmp_path / "seg.mp4"
+        builder.encode_segment(Segment(tmp_path / "i.png", tmp_path / "a.ogg", seg_out))
+        final = tmp_path / "final.mp4"
+        builder.concat([seg_out], final)
+
+        assert len(runner.calls) == 2
+        assert runner.calls[0][0] == bundled, "encode_segment must spawn the resolved binary"
+        assert runner.calls[1][0] == bundled, "concat must spawn the resolved binary"
+
     def test_concat_runs_ffmpeg_and_cleans_up_list_file(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
